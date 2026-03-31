@@ -1,0 +1,258 @@
+# ci-fast
+
+A Jenkins Shared Library that uses Claude (via AWS Bedrock) to intelligently select which tests to run based on code changes. Reduces CI feedback time by only running tests impacted by your diff.
+
+## How It Works
+
+```
+Jenkinsfile calls cifast()
+        │
+        ▼
+┌─────────────────┐
+│  Check Cache     │──hit──▶ Return cached TestSelection
+│  (SHA + branch)  │
+└────────┬────────┘
+         │ miss
+         ▼
+┌─────────────────┐     ┌──────────────────┐
+│  DiffAnalyzer    │     │  TestDiscovery    │
+│  git diff base.. │     │  find test files  │
+│  HEAD, truncate  │     │  by glob patterns │
+└────────┬────────┘     └────────┬─────────┘
+         │                       │
+         └───────────┬───────────┘
+                     ▼
+          ┌─────────────────────┐
+          │  BedrockClient       │
+          │  Send diff + test    │
+          │  list to Claude via  │
+          │  aws bedrock-runtime │
+          └──────────┬──────────┘
+                     ▼
+          ┌─────────────────────┐
+          │  ResponseParser      │
+          │  Parse JSON response │
+          │  Validate test names │
+          │  Strip hallucinations│
+          └──────────┬──────────┘
+                     ▼
+          ┌─────────────────────┐
+          │  Confidence Check    │
+          │  Below threshold?    │
+          │  → runAll = true     │
+          └──────────┬──────────┘
+                     ▼
+            Return TestSelection
+            (with build-tool formatters)
+```
+
+### Step by step
+
+1. **Cache check** — Looks for a cached result keyed by `commitSHA + baseBranch`. If found, returns immediately without calling Bedrock.
+
+2. **Diff capture** (`DiffAnalyzer`) — Runs `git diff <merge-base>...HEAD` excluding lock files, minified assets, and source maps. Truncates to `maxDiffLines` (default 3000) to stay within token limits.
+
+3. **Test discovery** (`TestDiscovery`) — Finds all test files matching your glob patterns (e.g. `**/src/test/**/*.java`). This becomes the "menu" Claude selects from.
+
+4. **Bedrock invocation** (`BedrockClient`) — Writes the request payload to a temp file (avoids shell escaping issues with large diffs), then calls `aws bedrock-runtime invoke-model`. Uses IAM instance profile or Jenkins AWS credentials for auth.
+
+5. **Response parsing** (`ResponseParser`) — Extracts Claude's JSON response containing `selected_tests`, `confidence`, and `reasoning`. Validates every test name against the actual test file list — hallucinated names are stripped and confidence is penalized to 0.5.
+
+6. **Confidence threshold** — If Claude's confidence is below the threshold (default 0.7), the library falls back to running all tests. This is the safety net.
+
+7. **Cache write** — Stores the result for future runs of the same commit.
+
+### Fail-open design
+
+Every failure mode results in running all tests, never skipping them:
+
+| Failure | Behavior |
+|---------|----------|
+| Bedrock API unreachable | `runAll = true` |
+| Response not parseable | `runAll = true` |
+| Hallucinated test names | Strip invalid names, penalize confidence |
+| Confidence below threshold | `runAll = true` |
+| No test files found | `runAll = true` |
+| git diff fails | `runAll = true` |
+
+## Quick Start
+
+### 1. Add the shared library
+
+Manage Jenkins → System → Global Pipeline Libraries:
+- Name: `ci-fast`
+- Default version: `main`
+- Source: your Git repo URL
+
+### 2. Store AWS credentials
+
+Either:
+- Use an IAM instance profile on your Jenkins agents (no config needed)
+- Add AWS credentials in Jenkins: Manage Jenkins → Credentials → Add `AWS Credentials` type
+
+### 3. Use in a Jenkinsfile
+
+```groovy
+@Library('ci-fast') _
+
+pipeline {
+    agent any
+    stages {
+        stage('Test') {
+            steps {
+                script {
+                    def sel = cifast(
+                        baseBranch: 'main',
+                        testGlobs: ['**/src/test/**/*.java'],
+                    )
+                    if (sel.runAll) {
+                        sh 'mvn test'
+                    } else {
+                        sh "mvn test -Dtest=${sel.mavenTestList()}"
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+### Build tool examples
+
+**Gradle:**
+```groovy
+def sel = cifast(testGlobs: ['**/src/test/**/*.java', '**/src/test/**/*.kt'])
+sh sel.runAll ? './gradlew test' : "./gradlew test --tests ${sel.gradleTestList()}"
+```
+
+**Jest:**
+```groovy
+def sel = cifast(testGlobs: ['**/*.test.ts', '**/*.spec.ts'])
+sh sel.runAll ? 'npx jest' : "npx jest ${sel.jestTestList()}"
+```
+
+**Pytest:**
+```groovy
+def sel = cifast(testGlobs: ['**/test_*.py', '**/*_test.py'])
+sh sel.runAll ? 'pytest' : "pytest ${sel.pytestTestList()}"
+```
+
+### Dry run
+
+See what would be selected without actually filtering:
+
+```groovy
+cifastDryRun(baseBranch: 'main', testGlobs: ['**/src/test/**/*.java'])
+```
+
+## Configuration
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `baseBranch` | `main` | Branch to diff against |
+| `credentialsId` | `null` | Jenkins AWS credentials ID. `null` = instance profile |
+| `region` | `us-east-2` | AWS region for Bedrock |
+| `model` | `us.anthropic.claude-sonnet-4-6-v1` | Bedrock model ID |
+| `confidenceThreshold` | `0.7` | Below this → run all tests |
+| `testGlobs` | `['**/src/test/**/*.java']` | File patterns to discover tests |
+| `maxDiffLines` | `3000` | Truncate diff after this many lines |
+| `dryRun` | `false` | Report selection without filtering |
+
+## TestSelection object
+
+The `cifast()` call returns a `TestSelection` with:
+
+| Property/Method | Type | Description |
+|----------------|------|-------------|
+| `runAll` | boolean | `true` if all tests should run (fallback or low confidence) |
+| `selectedTests` | List | Test file paths selected by Claude |
+| `skippedTests` | List | Test file paths that can be skipped |
+| `confidence` | double | 0.0-1.0 confidence score |
+| `reasoning` | String | Claude's explanation of the selection |
+| `cached` | boolean | Whether the result came from cache |
+| `mavenTestList()` | String | Comma-separated FQCNs for `-Dtest=` |
+| `gradleTestList()` | String | `--tests` compatible filter |
+| `jestTestList()` | String | Space-separated relative paths |
+| `pytestTestList()` | String | Space-separated relative paths |
+
+## Limitations
+
+### LLM-inherent
+
+- **No static analysis** — Claude reasons about the diff textually, not through an AST or dependency graph. It can miss indirect dependencies that aren't obvious from the diff (e.g., a change to a database column default that affects a test via 3 layers of abstraction).
+- **Token limits** — Large diffs are truncated at `maxDiffLines`. If the most impactful changes happen to be past the truncation point, they will be missed. The truncation notice lowers Claude's confidence, but it's not guaranteed to trigger a full run.
+- **Hallucination** — Claude may return test names that don't exist. The parser catches and strips these, but it indicates the model is guessing rather than matching. Confidence is penalized but not zeroed.
+- **Non-deterministic** — The same diff can produce slightly different selections across runs. The cache mitigates this for identical commits, but re-running after cache expiry may yield different results.
+- **No learning** — Each invocation is stateless. Claude doesn't learn from past test failures. A test that has historically failed for changes like this one gets no priority boost.
+
+### Architecture
+
+- **No dependency graph** — The library doesn't parse `import` statements, `pom.xml` module dependencies, or build tool dependency trees. It relies entirely on Claude's reasoning about the diff and test file names/paths.
+- **Flat test list** — Test discovery is glob-based. It doesn't understand test suites, parameterized tests, or test categories. If a test class contains 500 test methods and only 2 are relevant, the whole class runs.
+- **Workspace-local cache** — The cache lives in the Jenkins workspace. Different agents building the same commit won't share cache hits. Workspace cleanup wipes the cache.
+- **Single API call** — Very large projects with thousands of tests and a large diff may exceed Bedrock's input token limit. No chunking or multi-call strategy exists yet.
+- **AWS-only** — Hardcoded to Bedrock. Can't use Anthropic API directly, Azure, or local models without modifying `BedrockClient`.
+
+### Operational
+
+- **Bedrock latency** — Each uncached call adds 3-15 seconds of wall time for the API round-trip. For small test suites where the full run is <30 seconds, this overhead may not be worth it.
+- **Bedrock cost** — Approximately $0.003-0.01 per invocation with Sonnet (varies by diff/test list size). At scale (hundreds of builds/day), this adds up.
+- **AWS CLI required** — Jenkins agents must have `aws` CLI installed and configured. The library shells out to it rather than using the Java SDK.
+- **Jenkins plugin dependencies** — Requires the `Pipeline Utility Steps`, `HTTP Request`, and `AWS Credentials` plugins.
+
+## Future Improvements
+
+### High impact, low effort
+
+- **Changed-file heuristic pre-filter** — Before calling Claude, match changed file paths to test file paths by naming convention (e.g., `UserService.java` → `UserServiceTest.java`). Use Claude only for the ambiguous cases. Cuts API calls by 40-60% for well-structured projects.
+- **Parallel test + full run validation** — Run selected tests immediately, then run the full suite in a background stage. Compare results to measure accuracy over time without slowing the feedback loop.
+- **Configurable prompt overrides** — Let users supply a custom system prompt or append project-specific rules (e.g., "any change to `src/db/` must run all integration tests") without forking the library.
+- **Metrics collection** — Track selection accuracy (selected tests vs actual failures), API latency, cache hit rate, and cost per build. Publish to CloudWatch or a dashboard.
+
+### High impact, medium effort
+
+- **Import/dependency graph analysis** — Parse `import` statements (Java), `require/import` (JS/TS), or `from ... import` (Python) to build a lightweight dependency graph. Use it as structured context alongside the diff, replacing pure LLM reasoning for direct dependencies.
+- **Historical test failure correlation** — Store a mapping of `{changed_files → failed_tests}` from past builds. Feed the top-N historically correlated tests to Claude as "must include" hints. This is the core of what Launchable does.
+- **Shared cache (S3/Redis)** — Move the cache from workspace-local to a shared store so all agents benefit from the same commit being analyzed once.
+- **Multi-model strategy** — Use Haiku for small diffs (<500 lines, <50 tests) and Sonnet for larger ones. Cut costs by 80% for the simple cases.
+
+### High impact, high effort
+
+- **Feedback loop / fine-tuning** — When the selected tests pass but the full suite (run in validation) catches a failure, log the miss. Use accumulated miss data to improve the prompt or fine-tune a smaller model.
+- **Chunked analysis for monorepos** — For projects with 1000+ test files, split the test list into groups by module/package, run parallel Claude calls per group, and merge results. Handles token limits and improves accuracy per-module.
+- **Language-aware AST parsing** — Instead of sending raw diff text, send a structured summary: "method `calculate()` in `PricingEngine.java` changed signature from `(int)` to `(int, boolean)`". More token-efficient and less ambiguous for Claude.
+- **Flaky test detection** — Track test pass/fail rates per test across builds. Exclude known-flaky tests from selection scoring (run them separately or quarantine them). Prevents flaky tests from inflating the "must run" list.
+
+### Nice to have
+
+- **Slack/Teams notification** — Post selection reasoning to a channel for visibility: "ci-fast skipped 180 of 200 tests for PR #42 (confidence: 0.92)".
+- **Jenkins Blue Ocean integration** — Show selected vs skipped tests in the pipeline visualization.
+- **Direct Anthropic API support** — Add a `provider: 'anthropic'` config option for teams not on AWS.
+- **Gradle/Maven plugin wrappers** — Native build tool plugins that call `cifast` under the hood, so the Jenkinsfile just says `mvn ci-fast:test`.
+
+## Project Structure
+
+```
+ci-fast/
+├── vars/
+│   ├── cifast.groovy              # Main pipeline step entry point
+│   └── cifastDryRun.groovy        # Dry-run convenience step
+├── src/com/cifast/
+│   ├── BedrockClient.groovy       # AWS Bedrock invoke-model via CLI
+│   ├── Config.groovy              # Configuration defaults and parsing
+│   ├── DiffAnalyzer.groovy        # git diff capture and truncation
+│   ├── ResponseParser.groovy      # Claude response → TestSelection
+│   ├── ResultCache.groovy         # File-based SHA+branch cache
+│   ├── TestDiscovery.groovy       # Glob-based test file discovery
+│   └── TestSelection.groovy       # Result object with build-tool formatters
+└── resources/com/cifast/prompts/
+    ├── system.txt                 # System prompt for Claude
+    └── user.txt                   # User prompt template (diff + test list)
+```
+
+## Prerequisites
+
+- Jenkins 2.346+ with Pipeline plugin
+- AWS CLI installed on Jenkins agents
+- AWS Bedrock access with Claude model enabled in your region
+- Jenkins plugins: Pipeline Utility Steps, AWS Credentials (if not using instance profile)

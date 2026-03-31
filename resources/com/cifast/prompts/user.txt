@@ -1,0 +1,9 @@
+## Git Diff
+
+{{DIFF}}
+
+## All Test Files in Project
+
+{{TEST_FILES}}
+
+Analyze the diff above and select which tests from the list must be run. Return your answer as the specified JSON object.
