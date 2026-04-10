@@ -1,5 +1,7 @@
 package com.cifast
 
+import com.cloudbees.groovy.cps.NonCPS
+
 class TestDiscovery implements Serializable {
     def steps
 
@@ -15,9 +17,14 @@ class TestDiscovery implements Serializable {
                 returnStdout: true
             ).trim()
             if (result) {
-                allTests.addAll(result.readLines().collect { it.replaceFirst(/^\.\//, '') })
+                allTests.addAll(parseOutput(result))
             }
         }
         return allTests.unique()
+    }
+
+    @NonCPS
+    static List<String> parseOutput(String output) {
+        return output.readLines().collect { it.replaceFirst(/^\.\//, '') }
     }
 }

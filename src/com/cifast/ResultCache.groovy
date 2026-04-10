@@ -1,5 +1,6 @@
 package com.cifast
 
+import com.cloudbees.groovy.cps.NonCPS
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 
@@ -11,8 +12,15 @@ class ResultCache implements Serializable {
         this.steps = steps
     }
 
+    @NonCPS
+    static String cacheKey(String sha, String baseBranch) {
+        def safeSha = sha.replaceAll(/[^a-fA-F0-9]/, '')
+        def safeBranch = baseBranch.replaceAll(/[^a-zA-Z0-9_.\-]/, '_')
+        return "${safeSha}-${safeBranch}"
+    }
+
     TestSelection get(String sha, String baseBranch) {
-        def key = "${sha}-${baseBranch.replaceAll('/', '_')}"
+        def key = cacheKey(sha, baseBranch)
         def path = "${CACHE_DIR}/${key}.json"
         def exists = steps.sh(script: "test -f ${path} && echo yes || echo no", returnStdout: true).trim()
         if (exists == 'yes') {
@@ -31,7 +39,7 @@ class ResultCache implements Serializable {
     }
 
     void put(String sha, String baseBranch, TestSelection sel) {
-        def key = "${sha}-${baseBranch.replaceAll('/', '_')}"
+        def key = cacheKey(sha, baseBranch)
         steps.sh(script: "mkdir -p ${CACHE_DIR}")
         def json = JsonOutput.prettyPrint(JsonOutput.toJson([
             runAll: sel.runAll,

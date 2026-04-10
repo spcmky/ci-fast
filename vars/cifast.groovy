@@ -15,7 +15,12 @@ def call(Map params = [:]) {
     }
 
     // 2. Gather inputs
-    def diff = new DiffAnalyzer(this).capture(config.baseBranch, config.maxDiffLines)
+    def analyzer = new DiffAnalyzer(this)
+    def diff = analyzer.capture(config.baseBranch, config.maxDiffLines)
+    if (analyzer.truncationRatio > 0.5) {
+        echo "[ci-fast] Over 50% of diff truncated (${(int)(analyzer.truncationRatio * 100)}%), running all tests"
+        return TestSelection.runAllFallback("Diff truncation exceeded 50%")
+    }
     def allTests = new TestDiscovery(this).find(config.testGlobs)
 
     if (allTests.isEmpty()) {

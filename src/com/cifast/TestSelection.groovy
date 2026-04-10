@@ -29,8 +29,8 @@ class TestSelection implements Serializable {
             def fqcn = path.replaceAll(/\.(java|groovy|kt)$/, '')
                            .replaceAll('/', '.')
                            .replaceFirst(/^.*?src\.test\.(java|groovy|kotlin)\./, '')
-            "\"${fqcn}\""
-        }.join(' --tests ')
+            "--tests \"${fqcn}\""
+        }.join(' ')
     }
 
     /**

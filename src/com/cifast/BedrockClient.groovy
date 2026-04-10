@@ -30,14 +30,16 @@ class BedrockClient implements Serializable {
         ])
 
         // Write request to temp file to avoid shell escaping issues with large diffs
-        def requestFile = ".ci-fast-request-${System.currentTimeMillis()}.json"
-        def responseFile = ".ci-fast-response-${System.currentTimeMillis()}.json"
+        def uid = UUID.randomUUID().toString()
+        def requestFile = ".ci-fast-request-${uid}.json"
+        def responseFile = ".ci-fast-response-${uid}.json"
 
         steps.writeFile(file: requestFile, text: requestBody)
 
         try {
             def awsCmd = buildAwsCommand(requestFile, responseFile)
 
+            def exitCode = 0
             if (config.credentialsId) {
                 // Uses jenkins-aws-credentials plugin binding
                 steps.withCredentials([
@@ -48,11 +50,15 @@ class BedrockClient implements Serializable {
                         secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
                     ]
                 ]) {
-                    steps.sh(script: awsCmd)
+                    exitCode = steps.sh(script: awsCmd, returnStatus: true)
                 }
             } else {
                 // Use instance profile / environment credentials
-                steps.sh(script: awsCmd)
+                exitCode = steps.sh(script: awsCmd, returnStatus: true)
+            }
+
+            if (exitCode != 0) {
+                throw new RuntimeException("AWS Bedrock invoke-model failed (exit code ${exitCode})")
             }
 
             def responseContent = steps.readFile(file: responseFile)
