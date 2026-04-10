@@ -7,10 +7,29 @@ class TestSelection implements Serializable {
     double confidence
     String reasoning
     boolean cached
+    LanguagePlugin plugin
 
     /**
-     * Maven: -Dtest=com.foo.TestA,com.foo.TestB
+     * Format test list using the assigned plugin.
      */
+    String formatTestList() {
+        if (!plugin) {
+            throw new IllegalStateException("No plugin set on TestSelection")
+        }
+        return plugin.formatTestList(selectedTests)
+    }
+
+    /**
+     * Format test list using a specific plugin.
+     */
+    String formatForPlugin(LanguagePlugin p) {
+        return p.formatTestList(selectedTests)
+    }
+
+    /**
+     * @deprecated Use formatTestList() or formatForPlugin() instead
+     */
+    @Deprecated
     String mavenTestList() {
         selectedTests.collect { path ->
             path.replaceAll(/\.java$/, '')
@@ -22,8 +41,9 @@ class TestSelection implements Serializable {
     }
 
     /**
-     * Gradle: --tests "com.foo.TestA" --tests "com.foo.TestB"
+     * @deprecated Use formatTestList() or formatForPlugin() instead
      */
+    @Deprecated
     String gradleTestList() {
         selectedTests.collect { path ->
             def fqcn = path.replaceAll(/\.(java|groovy|kt)$/, '')
@@ -34,15 +54,17 @@ class TestSelection implements Serializable {
     }
 
     /**
-     * Jest: space-separated relative paths
+     * @deprecated Use formatTestList() or formatForPlugin() instead
      */
+    @Deprecated
     String jestTestList() {
         selectedTests.join(' ')
     }
 
     /**
-     * Pytest: space-separated relative paths
+     * @deprecated Use formatTestList() or formatForPlugin() instead
      */
+    @Deprecated
     String pytestTestList() {
         selectedTests.join(' ')
     }

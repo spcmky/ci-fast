@@ -1,6 +1,14 @@
 import com.cifast.*
 
 def call(Map params = [:]) {
+    // Resolve plugin
+    def plugin = resolvePlugin(params)
+
+    // Default testGlobs from plugin if not explicitly set
+    if (!params.containsKey('testGlobs')) {
+        params.testGlobs = plugin.getTestGlobs()
+    }
+
     def config = new Config(params)
     def metrics = new Metrics(this)
 
@@ -13,15 +21,16 @@ def call(Map params = [:]) {
     if (!config.dryRun) {
         def cached = cache.get(commitSha, config.baseBranch)
         if (cached) {
+            cached.plugin = plugin
             echo "[ci-fast] Cache hit for ${commitSha[0..7]}"
-            metrics.emit([event: 'cache_hit', sha: commitSha[0..7]])
+            metrics.emit([event: 'cache_hit', sha: commitSha[0..7], plugin: plugin.getId()])
             return cached
         }
     }
 
     // 2. Gather inputs
     def analyzer = new DiffAnalyzer(this)
-    def diff = analyzer.capture(config.baseBranch, config.maxDiffLines)
+    def diff = analyzer.capture(config.baseBranch, config.maxDiffLines, plugin.getDiffExclusions())
     if (analyzer.truncationRatio > 0.5) {
         echo "[ci-fast] Over 50% of diff truncated (${(int)(analyzer.truncationRatio * 100)}%), running all tests"
         metrics.emit([event: 'truncation_fallback', truncationRatio: analyzer.truncationRatio])
@@ -52,7 +61,7 @@ def call(Map params = [:]) {
     def selection
     def startTime = System.currentTimeMillis()
     try {
-        selection = new BedrockClient(this, config).analyzeAndSelect(diff, allTests)
+        selection = new BedrockClient(this, config).analyzeAndSelect(diff, allTests, plugin.getPromptHints())
     } catch (Exception e) {
         echo "[ci-fast] Bedrock API error: ${e.message}. Falling back to all tests."
         breaker.recordFailure()
@@ -60,6 +69,7 @@ def call(Map params = [:]) {
         return TestSelection.runAllFallback("API error: ${e.message}")
     }
     def apiDurationMs = System.currentTimeMillis() - startTime
+    selection.plugin = plugin
 
     // 6. Apply confidence threshold
     if (selection.confidence < config.confidenceThreshold) {
@@ -83,6 +93,7 @@ def call(Map params = [:]) {
         event: 'selection',
         sha: commitSha[0..7],
         model: config.model,
+        plugin: plugin.getId(),
         selected: selection.selectedTests.size(),
         total: allTests.size(),
         confidence: selection.confidence,
@@ -92,4 +103,19 @@ def call(Map params = [:]) {
     ])
     echo "[ci-fast] Selected ${selection.selectedTests.size()} of ${allTests.size()} tests (confidence: ${selection.confidence})"
     return selection
+}
+
+private LanguagePlugin resolvePlugin(Map params) {
+    if (params.plugin instanceof LanguagePlugin) {
+        return params.plugin
+    }
+    if (params.plugin instanceof String) {
+        return PluginRegistry.resolve(params.plugin as String)
+    }
+    def detected = PluginRegistry.detect(this)
+    if (detected) {
+        echo "[ci-fast] Auto-detected plugin: ${detected.getId()}"
+        return detected
+    }
+    return PluginRegistry.resolve('maven')
 }

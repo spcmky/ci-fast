@@ -11,8 +11,11 @@ class BedrockClient implements Serializable {
         this.config = config
     }
 
-    TestSelection analyzeAndSelect(String diff, List<String> allTests) {
+    TestSelection analyzeAndSelect(String diff, List<String> allTests, String promptHints = '') {
         def systemPrompt = steps.libraryResource('com/cifast/prompts/system.txt')
+        if (promptHints) {
+            systemPrompt += "\n\nLanguage-specific context:\n${promptHints}"
+        }
         def userTemplate = steps.libraryResource('com/cifast/prompts/user.txt')
 
         def testListing = allTests.collect { "- ${it}" }.join('\n')

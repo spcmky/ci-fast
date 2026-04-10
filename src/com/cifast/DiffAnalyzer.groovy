@@ -11,7 +11,7 @@ class DiffAnalyzer implements Serializable {
         this.steps = steps
     }
 
-    String capture(String baseBranch, int maxLines) {
+    String capture(String baseBranch, int maxLines, List<String> additionalExclusions = []) {
         // Fetch base branch with sufficient depth for merge-base
         steps.sh(script: "git fetch origin ${baseBranch} --deepen=50 2>/dev/null || git fetch origin ${baseBranch} --depth=50 2>/dev/null || true", returnStatus: true)
 
@@ -24,8 +24,12 @@ class DiffAnalyzer implements Serializable {
             return ''
         }
 
+        def baseExclusions = "':!package-lock.json' ':!yarn.lock' ':!Gemfile.lock' ':!composer.lock' ':!pnpm-lock.yaml' ':!*.min.js' ':!*.min.css' ':!*.map'"
+        def pluginExclusions = additionalExclusions.collect { "':!${it}'" }.join(' ')
+        def allExclusions = pluginExclusions ? "${baseExclusions} ${pluginExclusions}" : baseExclusions
+
         def diff = steps.sh(
-            script: "git diff ${mergeBase}...HEAD -- . ':!package-lock.json' ':!yarn.lock' ':!Gemfile.lock' ':!composer.lock' ':!pnpm-lock.yaml' ':!*.min.js' ':!*.min.css' ':!*.map'",
+            script: "git diff ${mergeBase}...HEAD -- . ${allExclusions}",
             returnStdout: true
         ).trim()
 
