@@ -57,11 +57,14 @@ def call(Map params = [:]) {
         config.model = config.smallModel
     }
 
-    // 5. Call Claude via Bedrock
+    // 5. Build combined prompt context
+    def promptContext = buildPromptContext(plugin, params)
+
+    // 6. Call Claude via Bedrock
     def selection
     def startTime = System.currentTimeMillis()
     try {
-        selection = new BedrockClient(this, config).analyzeAndSelect(diff, allTests, plugin.getPromptHints())
+        selection = new BedrockClient(this, config).analyzeAndSelect(diff, allTests, promptContext)
     } catch (Exception e) {
         echo "[ci-fast] Bedrock API error: ${e.message}. Falling back to all tests."
         breaker.recordFailure()
@@ -71,13 +74,13 @@ def call(Map params = [:]) {
     def apiDurationMs = System.currentTimeMillis() - startTime
     selection.plugin = plugin
 
-    // 6. Apply confidence threshold
+    // 7. Apply confidence threshold
     if (selection.confidence < config.confidenceThreshold) {
         echo "[ci-fast] Confidence ${selection.confidence} below threshold ${config.confidenceThreshold}. Running all tests."
         selection.runAll = true
     }
 
-    // 7. Dry run reporting
+    // 8. Dry run reporting
     if (config.dryRun) {
         echo "[ci-fast] DRY RUN - would select ${selection.selectedTests.size()} of ${allTests.size()} tests"
         echo "[ci-fast] Reasoning: ${selection.reasoning}"
@@ -86,7 +89,7 @@ def call(Map params = [:]) {
         return selection
     }
 
-    // 8. Cache and return
+    // 9. Cache and return
     cache.put(commitSha, config.baseBranch, selection)
     cache.cleanup()
     metrics.emit([
@@ -103,6 +106,40 @@ def call(Map params = [:]) {
     ])
     echo "[ci-fast] Selected ${selection.selectedTests.size()} of ${allTests.size()} tests (confidence: ${selection.confidence})"
     return selection
+}
+
+private String buildPromptContext(LanguagePlugin plugin, Map params) {
+    def sections = []
+
+    // Plugin hints (always present)
+    def pluginHints = plugin.getPromptHints()
+    if (pluginHints) {
+        sections.add("Language/framework context (${plugin.getId()} plugin):\n${pluginHints}")
+    }
+
+    // Project-level rules from .ci-fast-rules file
+    if (fileExists('.ci-fast-rules')) {
+        def projectRules = readFile(file: '.ci-fast-rules').trim()
+        if (projectRules.length() > 2000) {
+            echo "[ci-fast] Warning: .ci-fast-rules exceeds 2000 chars, truncating"
+            projectRules = projectRules.substring(0, 2000)
+        }
+        if (projectRules) {
+            sections.add("Project-specific rules (.ci-fast-rules):\n${projectRules}")
+        }
+    }
+
+    // Inline rules from promptRules param
+    def inlineRules = params.get('promptRules', '') as String
+    if (inlineRules?.trim()) {
+        if (inlineRules.length() > 1000) {
+            echo "[ci-fast] Warning: promptRules exceeds 1000 chars, truncating"
+            inlineRules = inlineRules.substring(0, 1000)
+        }
+        sections.add("Inline rules (from Jenkinsfile):\n${inlineRules.trim()}")
+    }
+
+    return sections.join('\n\n')
 }
 
 private LanguagePlugin resolvePlugin(Map params) {

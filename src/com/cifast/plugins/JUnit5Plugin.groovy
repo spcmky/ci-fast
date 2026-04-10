@@ -24,6 +24,21 @@ class JUnit5Plugin extends LanguagePlugin {
     }
 
     String getPromptHints() {
-        'Java project using JUnit 5: tests may use @Tag annotations for grouping. Changes to @ExtendWith custom extensions affect all tests using that extension. Changes to pom.xml or build.gradle dependencies should trigger all tests.'
+        '''\
+Naming conventions:
+- Test classes: FooTest.java, FooTests.java, or FooSpec.java
+- Nested tests use @Nested inner classes — changes to the outer class affect all nested tests
+- Parameterized tests via @MethodSource reference static factory methods — changes to those methods affect the test
+
+Implicit dependencies:
+- Custom @ExtendWith extensions (e.g., MockitoExtension, SpringExtension, custom lifecycle callbacks) → select all tests annotated with that extension
+- @RegisterExtension fields in base test classes → select all subclasses
+- @TempDir, @Timeout, or custom composed annotations defined in test utilities → select tests using them
+
+Framework gotchas:
+- @TestInstance(PER_CLASS) tests share state across methods — more sensitive to setup changes
+- @DynamicTest factories generate tests at runtime — changes to the factory method affect all generated cases
+- Conditional execution annotations (@EnabledIf, @DisabledOnOs) may hide tests on certain platforms
+- TestReporter and TestInfo injections mean test infrastructure changes can ripple to any test using them'''
     }
 }

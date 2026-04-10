@@ -160,6 +160,7 @@ cifastDryRun(baseBranch: 'main', testGlobs: ['**/src/test/**/*.java'])
 | `smallModel` | `us.anthropic.claude-haiku-4-5-v1` | Cheaper model for small diffs |
 | `smallDiffThreshold` | `200` | Max diff lines to use small model |
 | `smallTestThreshold` | `30` | Max test count to use small model |
+| `promptRules` | `''` | Inline rules appended to Claude's system prompt |
 
 ## TestSelection object
 
@@ -177,6 +178,93 @@ The `cifast()` call returns a `TestSelection` with:
 | `gradleTestList()` | String | `--tests` compatible filter |
 | `jestTestList()` | String | Space-separated relative paths |
 | `pytestTestList()` | String | Space-separated relative paths |
+
+## Customizing Test Selection Rules
+
+ci-fast supports two ways to give Claude project-specific guidance beyond the built-in plugin hints:
+
+### `.ci-fast-rules` file
+
+Create a `.ci-fast-rules` file in your repo root. It's read automatically on every run and appended to the system prompt. This is the recommended approach — it lives in version control, is PR-reviewable, and applies to every build.
+
+```groovy
+// Jenkinsfile — no extra config needed, .ci-fast-rules is read automatically
+def sel = cifast(plugin: 'maven')
+```
+
+### `promptRules` parameter
+
+Pass inline rules via the `cifast()` call for Jenkinsfile-level overrides. Useful for branch-specific or stage-specific rules.
+
+```groovy
+def sel = cifast(
+    plugin: 'jest',
+    promptRules: 'Changes to src/api/ must always include tests/integration/api.test.ts'
+)
+```
+
+Both can be used together — plugin hints, `.ci-fast-rules`, and `promptRules` are all combined in that order.
+
+### Writing effective `.ci-fast-rules`
+
+Rules should tell Claude things it **cannot infer from the diff alone**: project-specific conventions, implicit coupling, architectural boundaries. Avoid repeating what the plugin already covers.
+
+**Good rules** — project-specific knowledge:
+```
+Any change to src/db/migrations/ must run ALL tests (schema changes affect everything).
+Changes to src/shared/auth/ must include tests for: user-service, admin-service, api-gateway.
+The payments module (src/payments/) has a hard dependency on src/billing/ — always select tests for both.
+Files in src/generated/ are auto-generated — ignore them when selecting tests.
+```
+
+**Bad rules** — too generic or duplicating plugin hints:
+```
+Changes to package.json should run all tests.          # Plugin already covers this
+Test files end in .test.ts.                             # Plugin already knows this
+Be careful when selecting tests.                        # Too vague, not actionable
+Only run tests that are affected by the changes.        # This is literally the core task
+```
+
+### Recommended examples by project type
+
+**Java/Spring monolith:**
+```
+Changes to src/main/java/com/example/config/ → run ALL tests (Spring context config).
+Changes to src/main/resources/db/migration/ → run ALL tests (Flyway migrations).
+The OrderService depends on InventoryService and PaymentService — changes to either should include order tests.
+src/main/java/com/example/common/ is imported by every module — treat changes as run-all.
+```
+
+**TypeScript/React monorepo:**
+```
+packages/design-system/ is consumed by all apps — changes run all tests.
+Changes to packages/api-client/src/generated/ can be ignored (auto-generated from OpenAPI).
+The checkout flow spans packages/cart, packages/payment, and packages/order — test all three together.
+Any change to .env.example means environment variables changed — run integration tests.
+```
+
+**Python/Django:**
+```
+Changes to any models.py → run ALL tests (DB schema impact).
+Changes to myapp/signals.py → run tests for all apps that register signal handlers.
+The celery tasks in tasks/ depend on services/ — always test both together.
+conftest.py in tests/integration/ sets up the test database — changes run all integration tests.
+```
+
+**Go microservice:**
+```
+Changes to internal/middleware/ affect all HTTP handlers — run all handler tests.
+The proto/ directory contains generated code — ignore when selecting tests, but changes to *.proto files should run all tests.
+cmd/worker/ and cmd/api/ share internal/domain/ — test both when domain changes.
+```
+
+**E2E/Playwright:**
+```
+Changes to any page object in tests/pages/ → run all specs that import that page object.
+The global auth setup in tests/auth.setup.ts affects every authenticated test.
+API changes in src/api/routes/ → run the E2E spec that covers that user flow.
+Be extra conservative — missed E2E tests are expensive to debug.
+```
 
 ## Limitations
 

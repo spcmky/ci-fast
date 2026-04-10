@@ -81,9 +81,13 @@ class PluginTest extends Specification {
         plugin.formatTestList(tests) == './internal/auth/... ./cmd/server/...'
     }
 
-    def "all plugins provide non-null prompt hints"() {
+    def "all plugins provide structured prompt hints"() {
         expect:
-        plugin.getPromptHints() != null
+        def hints = plugin.getPromptHints()
+        hints != null
+        hints.contains('Naming conventions:')
+        hints.contains('Implicit dependencies:')
+        hints.contains('Framework gotchas:')
 
         where:
         plugin << [new MavenPlugin(), new GradlePlugin(), new JUnit5Plugin(), new JestPlugin(), new PytestPlugin(), new GoPlugin(), new RSpecPlugin(), new KarmaPlugin(), new PlaywrightPlugin()]

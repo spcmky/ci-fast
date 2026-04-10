@@ -24,6 +24,22 @@ class GoPlugin extends LanguagePlugin {
     }
 
     String getPromptHints() {
-        'Go project: changes to interfaces may affect all implementors. Changes to go.mod/go.sum should trigger all tests. Test files live in the same package directory as source files.'
+        '''\
+Naming conventions:
+- Test files live alongside source: foo.go → foo_test.go (same package directory)
+- Test functions: TestFoo(t *testing.T), benchmarks: BenchmarkFoo(b *testing.B)
+- _test.go files may use package_test (black-box) or package (white-box) — both are valid
+
+Implicit dependencies:
+- internal/ packages are only importable by their parent tree — changes affect tests in that subtree
+- testdata/ directories contain test fixtures loaded at runtime — changes affect tests in the same package
+- Shared test helpers (testutil/, testhelper packages) → select tests in all packages that import them
+- Interface changes in one package affect all packages that implement or consume that interface
+
+Framework gotchas:
+- TestMain(m *testing.M) in a package controls setup/teardown for ALL tests in that package
+- Build tags (//go:build integration) can hide tests — tag-gated tests won't appear in normal runs
+- go test runs per-package — a change to pkg/a only needs tests in packages that directly or transitively import pkg/a
+- Table-driven tests are common — a change to the test table data structure affects all subtests'''
     }
 }
