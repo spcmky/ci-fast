@@ -122,7 +122,7 @@ pipeline {
 **Gradle:**
 ```groovy
 def sel = cifast(testGlobs: ['**/src/test/**/*.java', '**/src/test/**/*.kt'])
-sh sel.runAll ? './gradlew test' : "./gradlew test --tests ${sel.gradleTestList()}"
+sh sel.runAll ? './gradlew test' : "./gradlew test ${sel.gradleTestList()}"
 ```
 
 **Jest:**
@@ -157,6 +157,9 @@ cifastDryRun(baseBranch: 'main', testGlobs: ['**/src/test/**/*.java'])
 | `testGlobs` | `['**/src/test/**/*.java']` | File patterns to discover tests |
 | `maxDiffLines` | `3000` | Truncate diff after this many lines |
 | `dryRun` | `false` | Report selection without filtering |
+| `smallModel` | `us.anthropic.claude-haiku-4-5-v1` | Cheaper model for small diffs |
+| `smallDiffThreshold` | `200` | Max diff lines to use small model |
+| `smallTestThreshold` | `30` | Max test count to use small model |
 
 ## TestSelection object
 
@@ -198,7 +201,7 @@ The `cifast()` call returns a `TestSelection` with:
 - **Bedrock latency** — Each uncached call adds 3-15 seconds of wall time for the API round-trip. For small test suites where the full run is <30 seconds, this overhead may not be worth it.
 - **Bedrock cost** — Approximately $0.003-0.01 per invocation with Sonnet (varies by diff/test list size). At scale (hundreds of builds/day), this adds up.
 - **AWS CLI required** — Jenkins agents must have `aws` CLI installed and configured. The library shells out to it rather than using the Java SDK.
-- **Jenkins plugin dependencies** — Requires the `Pipeline Utility Steps`, `HTTP Request`, and `AWS Credentials` plugins.
+- **Jenkins plugin dependencies** — Requires the `Credentials Binding` and `AWS Credentials` plugins (if not using IAM instance profile).
 
 ## Future Improvements
 
@@ -250,9 +253,19 @@ ci-fast/
     └── user.txt                   # User prompt template (diff + test list)
 ```
 
+## Running Tests
+
+```bash
+docker build -f Dockerfile.test -t ci-fast-test . && docker run --rm ci-fast-test
+```
+
+Tests use [Spock](https://spockframework.org/) and run inside a Gradle container — no local JDK or Jenkins runtime required. The `stubs/` directory provides a `@NonCPS` annotation stub so source compiles without Jenkins on the classpath.
+
+Test files live in `test/com/cifast/` and cover input validation, response parsing, hallucination handling, and build-tool formatters.
+
 ## Prerequisites
 
 - Jenkins 2.346+ with Pipeline plugin
 - AWS CLI installed on Jenkins agents
 - AWS Bedrock access with Claude model enabled in your region
-- Jenkins plugins: Pipeline Utility Steps, AWS Credentials (if not using instance profile)
+- Jenkins plugins: Credentials Binding, AWS Credentials (if not using instance profile)

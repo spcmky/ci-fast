@@ -5,6 +5,7 @@ import com.cloudbees.groovy.cps.NonCPS
 class DiffAnalyzer implements Serializable {
     def steps
     double truncationRatio = 0.0
+    int diffLineCount = 0
 
     DiffAnalyzer(def steps) {
         this.steps = steps
@@ -24,7 +25,7 @@ class DiffAnalyzer implements Serializable {
         }
 
         def diff = steps.sh(
-            script: "git diff ${mergeBase}...HEAD -- . ':!*.lock' ':!package-lock.json' ':!*.min.js' ':!*.min.css' ':!*.map'",
+            script: "git diff ${mergeBase}...HEAD -- . ':!package-lock.json' ':!yarn.lock' ':!Gemfile.lock' ':!composer.lock' ':!pnpm-lock.yaml' ':!*.min.js' ':!*.min.css' ':!*.map'",
             returnStdout: true
         ).trim()
 
@@ -32,14 +33,14 @@ class DiffAnalyzer implements Serializable {
             return ''
         }
 
-        this.truncationRatio = computeTruncationRatio(diff, maxLines)
+        this.diffLineCount = computeLineCount(diff)
+        this.truncationRatio = this.diffLineCount > maxLines ? (this.diffLineCount - maxLines) / (double) this.diffLineCount : 0.0
         return truncate(diff, maxLines)
     }
 
     @NonCPS
-    static double computeTruncationRatio(String diff, int maxLines) {
-        def lineCount = diff.readLines().size()
-        return lineCount > maxLines ? (lineCount - maxLines) / (double) lineCount : 0.0
+    static int computeLineCount(String text) {
+        return text.readLines().size()
     }
 
     @NonCPS

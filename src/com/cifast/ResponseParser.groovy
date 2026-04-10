@@ -44,9 +44,11 @@ class ResponseParser implements Serializable {
         def confidence = (result.confidence ?: 0.0) as double
         def reasoning = (result.reasoning ?: '') as String
 
-        // Validate: every selected test must exist in allTests
-        def validated = selected.findAll { candidate ->
-            allTests.any { actual -> actual == candidate || actual.endsWith(candidate) }
+        // Validate and resolve: map selected names to actual test paths
+        def validated = []
+        selected.each { candidate ->
+            def match = allTests.find { actual -> actual == candidate || actual.endsWith("/${candidate}") }
+            if (match) validated.add(match)
         }
 
         // If all selected tests were hallucinated, fall back to running all
@@ -59,9 +61,7 @@ class ResponseParser implements Serializable {
             confidence = Math.min(confidence, 0.5)
         }
 
-        def skipped = allTests.findAll { actual ->
-            !validated.any { sel -> actual == sel || actual.endsWith(sel) }
-        }
+        def skipped = allTests.findAll { !validated.contains(it) }
 
         return new TestSelection(
             runAll: false,

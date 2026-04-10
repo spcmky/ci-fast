@@ -1,0 +1,30 @@
+plugins {
+    id 'groovy'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.codehaus.groovy:groovy-all:2.4.21'
+
+    testImplementation 'org.spockframework:spock-core:1.3-groovy-2.4'
+    testImplementation 'junit:junit:4.13.2'
+}
+
+sourceSets {
+    main {
+        groovy {
+            srcDirs = ['src', 'vars', 'stubs']
+        }
+        resources {
+            srcDirs = ['resources']
+        }
+    }
+    test {
+        groovy {
+            srcDirs = ['test']
+        }
+    }
+}

@@ -1,0 +1,17 @@
+FROM gradle:7.6-jdk11-jammy
+
+WORKDIR /app
+
+# Copy build config first to cache dependency downloads
+COPY build.gradle .
+RUN gradle dependencies --no-daemon 2>/dev/null || true
+
+# Copy source, stubs, and tests
+COPY src/ src/
+COPY vars/ vars/
+COPY stubs/ stubs/
+COPY resources/ resources/
+COPY test/ test/
+
+# Run tests
+CMD ["gradle", "test", "--no-daemon"]

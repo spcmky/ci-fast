@@ -9,6 +9,9 @@ class Config implements Serializable {
     List<String> testGlobs
     int maxDiffLines
     boolean dryRun
+    String smallModel
+    int smallDiffThreshold
+    int smallTestThreshold
 
     Config(Map params) {
         this.baseBranch          = sanitizeBranch(params.get('baseBranch', 'main') as String)
@@ -19,6 +22,9 @@ class Config implements Serializable {
         this.testGlobs           = sanitizeGlobs(params.get('testGlobs', ['**/src/test/**/*.java']) as List<String>)
         this.maxDiffLines        = Math.max(1, params.get('maxDiffLines', 3000) as int)
         this.dryRun              = params.get('dryRun', false) as boolean
+        this.smallModel          = sanitize(params.get('smallModel', 'us.anthropic.claude-haiku-4-5-v1') as String, /^[a-zA-Z0-9._:\-]+$/, 'smallModel')
+        this.smallDiffThreshold  = Math.max(1, params.get('smallDiffThreshold', 200) as int)
+        this.smallTestThreshold  = Math.max(1, params.get('smallTestThreshold', 30) as int)
     }
 
     private static String sanitizeBranch(String branch) {
